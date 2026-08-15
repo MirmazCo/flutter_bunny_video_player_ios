@@ -30,6 +30,12 @@ class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
         let token = params?["token"] as? String ?? nil
         let expires = params?["expires"] as? Int ?? nil
         let referer = params?["referer"] as? String ?? nil
+        let progressIntervalMs = params?["progressIntervalMs"] as? Int ?? 10_000
+        let isScreenShotProtectEnable =
+            params?["isScreenShotProtectEnable"] as? Bool ?? true
+        let watermarkText = params?["watermarkText"] as? String ?? ""
+        let startProgressPercent =
+            (params?["startProgressPercent"] as? NSNumber)?.doubleValue ?? 0
 
         let controller = BunnyPlayerViewController(
             accessKey: accessKey as? String ?? nil,
@@ -38,7 +44,10 @@ class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
             playIconAsset: playIconAsset,
             token: token,
             expires: expires,
-            referer: referer
+            referer: referer,
+            screenshotProtectionEnabled: isScreenShotProtectEnable,
+            watermarkText: watermarkText,
+            startProgressPercent: startProgressPercent
         )
         _controller = controller
         _view = controller.view
@@ -56,11 +65,19 @@ class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
             _channel = channel
             NSLog("🟢 [BunnyPlayer] MethodChannel registered: flutter_bunny_video_player_ios_%lld", viewId)
         }
+
+        _controller.onProgress = { [weak self] payload in
+            self?._channel?.invokeMethod("progress", arguments: payload)
+        }
+        _controller.startProgressReporting(intervalMs: progressIntervalMs)
     }
 
     private func handle(call: FlutterMethodCall, result: @escaping FlutterResult) {
         NSLog("📡 [BunnyPlayer] method call: %@", call.method)
         switch call.method {
+        case "resetZoom":
+            _controller.resetZoomInstant()
+            result(nil)
         case "dispose":
             _controller.cleanup()
             _channel?.setMethodCallHandler(nil)
