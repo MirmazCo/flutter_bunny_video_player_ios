@@ -89,7 +89,21 @@ final class SecureVideoMirror {
     private var startedAt: CFTimeInterval = 0
     private var abandoned = false
 
+    /// Last frame painted on screen. Used by the in-player screenshot button
+    /// so a capture does not need a second `AVPlayerItemVideoOutput` (the
+    /// mirror already owns one, and `hasNewPixelBuffer` is often false right
+    /// after the display-link tick consumed it).
+    private var lastFrame: CGImage?
+
     var isRunning: Bool { displayLink != nil }
+
+    /// The picture currently on screen, if the mirror has delivered at least
+    /// one frame. Independent of system screenshots — those still come out
+    /// blank because this image lives under the secure canvas.
+    func copyCurrentFrame() -> UIImage? {
+        guard let frame = lastFrame else { return nil }
+        return UIImage(cgImage: frame)
+    }
 
     /// Starts mirroring [player] in place of [source], or re-targets an
     /// existing mirror. Idempotent — safe to call from a layout pass or a
@@ -241,6 +255,7 @@ final class SecureVideoMirror {
         observedItem = nil
 
         layer.contents = nil
+        lastFrame = nil
         layer.removeAllAnimations()
         mirrorView.removeFromSuperview()
         secureCanvas = nil
@@ -294,6 +309,7 @@ final class SecureVideoMirror {
             return
         }
         conversionFailures = 0
+        lastFrame = frame
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)

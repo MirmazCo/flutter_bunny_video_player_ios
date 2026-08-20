@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -47,12 +48,26 @@ class BunnyPlaybackProgress {
       '${position.inSeconds}s / ${duration.inSeconds}s, playing: $isPlaying)';
 }
 
+/// Result of a screenshot save attempt. [name] is the gallery asset
+/// identifier on success, [error] holds the failure reason otherwise.
+class ScreenshotResult {
+  final String? name;
+  final String? error;
+  const ScreenshotResult({this.name, this.error});
+  bool get success => name != null;
+}
+
 class BunnyPlayerController {
   MethodChannel? _channel;
   bool _disposed = false;
   ValueChanged<BunnyPlaybackProgress>? onProgress;
+  final _screenshotController = StreamController<ScreenshotResult>.broadcast();
 
   bool get isDisposed => _disposed;
+
+  /// Fires whenever the user taps the native screenshot button or the app
+  /// calls [takeScreenshot]. Emits both success and failure results.
+  Stream<ScreenshotResult> get screenshotStream => _screenshotController.stream;
 
   void _attach(int viewId) {
     _channel?.setMethodCallHandler(null);
@@ -64,16 +79,66 @@ class BunnyPlayerController {
 
   Future<void> _handleCall(MethodCall call) async {
     if (_disposed) return;
-    if (call.method != 'progress') return;
-    final Object? args = call.arguments;
-    if (args is! Map<Object?, Object?>) return;
-    onProgress?.call(BunnyPlaybackProgress._fromMap(args));
+    switch (call.method) {
+      case 'progress':
+        final Object? args = call.arguments;
+        if (args is! Map<Object?, Object?>) return;
+        onProgress?.call(BunnyPlaybackProgress._fromMap(args));
+        break;
+      case 'screenshotSaved':
+        final Object? args = call.arguments;
+        if (args is Map) {
+          _screenshotController.add(ScreenshotResult(
+            name: args['name'] as String?,
+          ));
+        }
+        break;
+      case 'screenshotFailed':
+        final Object? args = call.arguments;
+        if (args is Map) {
+          _screenshotController.add(ScreenshotResult(
+            error: args['error'] as String? ?? 'Unknown error',
+          ));
+        }
+        break;
+    }
   }
 
   /// Reset zoom to default (1.0x scale, centered)
   Future<void> resetZoom() async {
     if (_disposed) return;
     await _channel?.invokeMethod('resetZoom');
+  }
+
+  /// Captures the current playback frame as raw PNG bytes (no watermark,
+  /// no save). Useful when the host app wants to handle compositing or
+  /// persistence itself. Returns null if the native side could not produce
+  /// a frame (e.g. video not yet ready).
+  Future<Uint8List?> captureFrame() async {
+    if (_disposed) return null;
+    try {
+      final result = await _channel?.invokeMethod<Uint8List?>('captureFrame');
+      return result;
+    } on PlatformException {
+      return null;
+    }
+  }
+
+  /// Captures the current frame, composites the configured `watermarkText`
+  /// in the top-left corner natively, and saves the result to the Photos
+  /// library. Returns a [ScreenshotResult] with the gallery asset name on
+  /// success or an error string on failure. Same result is also delivered
+  /// via [screenshotStream].
+  Future<ScreenshotResult> takeScreenshot() async {
+    if (_disposed) {
+      return const ScreenshotResult(error: 'Controller disposed');
+    }
+    try {
+      final name = await _channel?.invokeMethod<String>('takeScreenshot');
+      return ScreenshotResult(name: name);
+    } on PlatformException catch (e) {
+      return ScreenshotResult(error: e.message ?? 'Unknown error');
+    }
   }
 
   Future<void> dispose() async {
@@ -87,6 +152,7 @@ class BunnyPlayerController {
     _channel?.setMethodCallHandler(null);
     _channel = null;
     onProgress = null;
+    await _screenshotController.close();
   }
 }
 

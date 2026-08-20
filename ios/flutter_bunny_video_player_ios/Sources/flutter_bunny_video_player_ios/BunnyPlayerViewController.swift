@@ -11,6 +11,7 @@ import UIKit
 import AVFoundation
 import BunnyStreamPlayer
 import Flutter
+import Photos
 class BunnyPlayerViewController: UIViewController {
     let accessKey: String?
     let videoId: String
@@ -40,9 +41,19 @@ class BunnyPlayerViewController: UIViewController {
     /// Pushes a progress snapshot to Dart. Wired by `BunnyPlayerPlatformView`.
     var onProgress: (([String: Any]) -> Void)?
 
+    /// Fires `screenshotSaved` / `screenshotFailed` to Dart. Wired by
+    /// `BunnyPlayerPlatformView`. Same payload as `bunny_stream_player`.
+    var onScreenshotEvent: ((String, [String: Any]) -> Void)?
+
     private var progressTimer: Timer?
 
     private var watermarkView: NativeWatermarkView?
+
+    /// In-player camera button. Reparented onto the active host (inline ↔
+    /// fullscreen) the same way the watermark is.
+    private var screenshotBtn: UIView?
+    private var screenshotBtnConstraints: [NSLayoutConstraint] = []
+    private var isCleanedUp = false
 
     /// Draws the fullscreen video through CoreAnimation so the secure canvas
     /// can exclude it from captures — `AVPlayerLayer` output cannot be
@@ -269,6 +280,7 @@ class BunnyPlayerViewController: UIViewController {
         setupZoomGestures()
         startHostWatchdog()
         attachWatermark(to: view)
+        attachScreenshotButton(to: view)
         if screenshotProtectionEnabled {
             startScreenshotProtection()
         }
@@ -484,6 +496,11 @@ class BunnyPlayerViewController: UIViewController {
             ensureSecureVideoMirror()
         }
 
+        // Re-assert overlays every tick: the SDK rebuilds chrome while
+        // playing, which would otherwise cover the camera button.
+        attachWatermark(to: host)
+        attachScreenshotButton(to: host)
+
         guard host !== zoomHostView else { return }
 
         if zoomHostView != nil {
@@ -495,8 +512,6 @@ class BunnyPlayerViewController: UIViewController {
         zoomContainerLayer = nil
         currentZoomScale = 1.0
         currentZoomTranslation = .zero
-        // The watermark follows the active host (inline ↔ fullscreen).
-        attachWatermark(to: host)
         NSLog(
             "🔍 [BunnyPlayer] zoom host is now %@",
             host === view ? "inline player" : "fullscreen player"
@@ -522,6 +537,284 @@ class BunnyPlayerViewController: UIViewController {
         }
         host.bringSubviewToFront(wm)
         watermarkView = wm
+        // Keep the camera button above the (non-interactive) watermark so it
+        // stays tappable and visually on top.
+        if let btn = screenshotBtn { host.bringSubviewToFront(btn) }
+    }
+
+    // MARK: - Screenshot button
+
+    /// Glass camera button in the top-left. Top-right is the SDK's
+    /// fullscreen control, so the camera sits on the opposite side.
+    ///
+    /// Captures the decoded video frame (not a UIKit screenshot), so player
+    /// controls never appear in the image — only the configured watermark
+    /// pill is composited on save.
+    private func attachScreenshotButton(to host: UIView) {
+        let btn = screenshotBtn ?? createGlassButton(size: 36, systemName: "camera.fill")
+        if screenshotBtn == nil {
+            let tap = UITapGestureRecognizer(target: self, action: #selector(onScreenshotTap))
+            btn.addGestureRecognizer(tap)
+            screenshotBtn = btn
+        }
+        if btn.superview !== host {
+            NSLayoutConstraint.deactivate(screenshotBtnConstraints)
+            screenshotBtnConstraints = []
+            btn.removeFromSuperview()
+            host.addSubview(btn)
+            let constraints = [
+                btn.topAnchor.constraint(equalTo: host.safeAreaLayoutGuide.topAnchor, constant: 12),
+                btn.leadingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+                btn.widthAnchor.constraint(equalToConstant: 36),
+                btn.heightAnchor.constraint(equalToConstant: 36),
+            ]
+            NSLayoutConstraint.activate(constraints)
+            screenshotBtnConstraints = constraints
+        }
+        host.bringSubviewToFront(btn)
+    }
+
+    private func createGlassButton(size: CGFloat, systemName: String) -> UIView {
+        let container = UIView()
+        container.backgroundColor = UIColor(white: 1, alpha: 0.25)
+        container.layer.cornerRadius = size / 2
+        container.layer.borderWidth = 1
+        container.layer.borderColor = UIColor(white: 1, alpha: 0.19).cgColor
+        container.clipsToBounds = true
+        container.isUserInteractionEnabled = true
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let config = UIImage.SymbolConfiguration(pointSize: size * 0.35, weight: .semibold)
+        let imageView = UIImageView(image: UIImage(systemName: systemName, withConfiguration: config))
+        imageView.tintColor = .white
+        imageView.contentMode = .scaleAspectFit
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(imageView)
+
+        NSLayoutConstraint.activate([
+            imageView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            imageView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+        ])
+        return container
+    }
+
+    @objc private func onScreenshotTap() {
+        addPressAnimation(screenshotBtn)
+        takeScreenshotInternal { _, _ in }
+    }
+
+    private func addPressAnimation(_ view: UIView?) {
+        guard let view = view else { return }
+        UIView.animate(withDuration: 0.1, animations: {
+            view.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+        }) { _ in
+            UIView.animate(withDuration: 0.1) {
+                view.transform = .identity
+            }
+        }
+    }
+
+    /// Captures the current playback frame.
+    ///
+    /// Prefers the secure mirror's last painted frame when it is running —
+    /// that is the picture on screen, and attaching a second
+    /// `AVPlayerItemVideoOutput` would race the mirror's own output.
+    /// Falls back to a short poll on a fresh output (same as
+    /// `bunny_stream_player`) when the mirror has not delivered a frame yet.
+    func captureCurrentFrame(completion: @escaping (UIImage?, String?) -> Void) {
+        if let image = secureVideoMirror.copyCurrentFrame() {
+            completion(image, nil)
+            return
+        }
+        guard let item = avPlayer?.currentItem else {
+            completion(nil, "No current player item")
+            return
+        }
+        let attrs: [String: Any] = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
+        let output = AVPlayerItemVideoOutput(pixelBufferAttributes: attrs)
+        item.add(output)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            var buffer: CVPixelBuffer?
+            var lastTime = item.currentTime()
+            for _ in 0..<30 {
+                lastTime = item.currentTime()
+                if output.hasNewPixelBuffer(forItemTime: lastTime) {
+                    buffer = output.copyPixelBuffer(
+                        forItemTime: lastTime,
+                        itemTimeForDisplay: nil
+                    )
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.01)
+            }
+            DispatchQueue.main.async {
+                item.remove(output)
+                guard let pb = buffer else {
+                    completion(nil, "No pixel buffer available")
+                    return
+                }
+                let ciImage = CIImage(cvPixelBuffer: pb)
+                let ctx = CIContext()
+                guard let cg = ctx.createCGImage(ciImage, from: ciImage.extent) else {
+                    completion(nil, "CGImage creation failed")
+                    return
+                }
+                completion(UIImage(cgImage: cg), nil)
+            }
+        }
+    }
+
+    /// Draws [watermarkText] in the top-left corner of [image]. Returns the
+    /// image as-is if the watermark text is empty.
+    private func applyWatermark(_ image: UIImage, text: String) -> UIImage {
+        if text.isEmpty { return image }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+        return renderer.image { _ in
+            image.draw(at: .zero)
+
+            let baseSize = max(image.size.width, image.size.height) * 0.025
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.boldSystemFont(ofSize: baseSize),
+                .foregroundColor: UIColor.white
+            ]
+            let attributed = NSAttributedString(string: text, attributes: attrs)
+            let textSize = attributed.size()
+
+            let padX = baseSize * 0.6
+            let padY = baseSize * 0.35
+            let margin = baseSize * 0.8
+
+            let pillRect = CGRect(
+                x: margin,
+                y: margin,
+                width: textSize.width + padX * 2,
+                height: textSize.height + padY * 2
+            )
+            let bgPath = UIBezierPath(
+                roundedRect: pillRect,
+                cornerRadius: baseSize * 0.4
+            )
+            UIColor.black.withAlphaComponent(0.53).setFill()
+            bgPath.fill()
+
+            let textOrigin = CGPoint(
+                x: pillRect.minX + padX,
+                y: pillRect.minY + padY
+            )
+            attributed.draw(at: textOrigin)
+        }
+    }
+
+    /// Saves [image] to the user's Photos library via PhotoKit. Caller must
+    /// have `NSPhotoLibraryAddUsageDescription` in Info.plist.
+    private func saveToPhotos(
+        _ image: UIImage,
+        completion: @escaping (Bool, String?) -> Void
+    ) {
+        let perform = {
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }, completionHandler: { success, error in
+                DispatchQueue.main.async {
+                    completion(success, error?.localizedDescription)
+                }
+            })
+        }
+        if #available(iOS 14, *) {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+                if status == .authorized || status == .limited {
+                    perform()
+                } else {
+                    DispatchQueue.main.async {
+                        completion(false, "Photos permission denied")
+                    }
+                }
+            }
+        } else {
+            PHPhotoLibrary.requestAuthorization { status in
+                if status == .authorized {
+                    perform()
+                } else {
+                    DispatchQueue.main.async {
+                        completion(false, "Photos permission denied")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Full pipeline: capture → watermark → save → toast → event. Calls
+    /// [completion] with a generated asset name on success or an error
+    /// string on failure.
+    func takeScreenshotInternal(
+        completion: @escaping (String?, String?) -> Void
+    ) {
+        captureCurrentFrame { [weak self] image, captureError in
+            guard let self = self, !self.isCleanedUp else {
+                completion(nil, "View disposed")
+                return
+            }
+            guard let frame = image else {
+                self.onScreenshotEvent?("screenshotFailed", ["error": captureError ?? "Unknown"])
+                self.showToast("Screenshot failed")
+                completion(nil, captureError)
+                return
+            }
+            let composed = self.applyWatermark(frame, text: self.watermarkText)
+            self.saveToPhotos(composed) { success, saveError in
+                if success {
+                    let name = "BunnyPlayer_\(Int(Date().timeIntervalSince1970 * 1000))"
+                    self.onScreenshotEvent?("screenshotSaved", ["name": name])
+                    self.showToast("Screenshot saved")
+                    completion(name, nil)
+                } else {
+                    self.onScreenshotEvent?("screenshotFailed", ["error": saveError ?? "Unknown"])
+                    self.showToast("Screenshot failed")
+                    completion(nil, saveError)
+                }
+            }
+        }
+    }
+
+    /// Brief toast-like overlay shown over the player after a screenshot.
+    private func showToast(_ text: String) {
+        let host: UIView = zoomHostView ?? view
+        let label = UILabel()
+        label.text = text
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 14, weight: .medium)
+        label.textAlignment = .center
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.7)
+        label.layer.cornerRadius = 8
+        label.layer.masksToBounds = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        host.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: host.centerXAnchor),
+            label.bottomAnchor.constraint(
+                equalTo: host.safeAreaLayoutGuide.bottomAnchor, constant: -32
+            ),
+            label.heightAnchor.constraint(equalToConstant: 36),
+            label.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+        ])
+        label.layoutIfNeeded()
+        label.layer.cornerRadius = 18
+        label.alpha = 0
+        UIView.animate(withDuration: 0.2, animations: {
+            label.alpha = 1
+        }) { _ in
+            UIView.animate(
+                withDuration: 0.3, delay: 1.4, options: [],
+                animations: { label.alpha = 0 },
+                completion: { _ in label.removeFromSuperview() }
+            )
+        }
     }
 
     // MARK: - Fullscreen keep-awake + screenshot shield
@@ -775,6 +1068,7 @@ class BunnyPlayerViewController: UIViewController {
 
     func cleanup() {
         NSLog("🧹 [BunnyPlayer] cleanup() called — videoId: %@, children: %d", videoId, children.count)
+        isCleanedUp = true
         // Before the AVPlayer is torn down: the mirror holds a video output on
         // its item and a display link on the main run loop. Restore the source
         // layer on the way out — a hidden player layer is never what we want to
@@ -800,10 +1094,15 @@ class BunnyPlayerViewController: UIViewController {
         progressTimer?.invalidate()
         progressTimer = nil
         onProgress = nil
+        onScreenshotEvent = nil
         NotificationCenter.default.removeObserver(self)
         watermarkView?.stopAnimation()
         watermarkView?.removeFromSuperview()
         watermarkView = nil
+        NSLayoutConstraint.deactivate(screenshotBtnConstraints)
+        screenshotBtnConstraints = []
+        screenshotBtn?.removeFromSuperview()
+        screenshotBtn = nil
         isInFullscreen = false
         if idleTimerDisabledByUs {
             UIApplication.shared.isIdleTimerDisabled = false

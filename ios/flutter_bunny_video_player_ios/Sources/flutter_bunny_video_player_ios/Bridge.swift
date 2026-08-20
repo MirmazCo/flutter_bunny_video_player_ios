@@ -69,6 +69,9 @@ class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
         _controller.onProgress = { [weak self] payload in
             self?._channel?.invokeMethod("progress", arguments: payload)
         }
+        _controller.onScreenshotEvent = { [weak self] type, payload in
+            self?._channel?.invokeMethod(type, arguments: payload)
+        }
         _controller.startProgressReporting(intervalMs: progressIntervalMs)
     }
 
@@ -78,6 +81,30 @@ class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
         case "resetZoom":
             _controller.resetZoomInstant()
             result(nil)
+        case "captureFrame":
+            _controller.captureCurrentFrame { image, error in
+                if let png = image?.pngData() {
+                    result(FlutterStandardTypedData(bytes: png))
+                } else {
+                    result(FlutterError(
+                        code: "captureFrame",
+                        message: error ?? "Frame capture failed",
+                        details: nil
+                    ))
+                }
+            }
+        case "takeScreenshot":
+            _controller.takeScreenshotInternal { name, error in
+                if let n = name {
+                    result(n)
+                } else {
+                    result(FlutterError(
+                        code: "takeScreenshot",
+                        message: error ?? "Screenshot failed",
+                        details: nil
+                    ))
+                }
+            }
         case "dispose":
             _controller.cleanup()
             _channel?.setMethodCallHandler(nil)
