@@ -202,6 +202,15 @@ class BunnyIosPlayerView extends StatefulWidget {
   /// so callers listening there keep working.
   final ValueChanged<BunnyPlaybackProgress>? onProgress;
 
+  /// Language for the player's own menus (Quality / Speed / Captions / Cancel),
+  /// as a language code such as `'ar'` or `'en'`.
+  ///
+  /// Those menus are drawn and localized natively, and iOS resolves their strings
+  /// against the *device* language — an Arabic app on an English phone would show
+  /// English menus. Pass the language the app itself is running in. Null keeps
+  /// the device's own resolution.
+  final String? languageCode;
+
   const BunnyIosPlayerView({
     super.key,
     this.controller,
@@ -217,6 +226,7 @@ class BunnyIosPlayerView extends StatefulWidget {
     this.startProgressPercent = 0.0,
     this.progressInterval = const Duration(seconds: 10),
     this.onProgress,
+    this.languageCode,
   });
 
   @override
@@ -292,6 +302,7 @@ class _BunnyPlayerViewState extends State<BunnyIosPlayerView> {
           'isScreenShotProtectEnable': widget.isScreenShotProtectEnable,
           'watermarkText': widget.watermarkText ?? '',
           'startProgressPercent': widget.startProgressPercent,
+          'languageCode': widget.languageCode ?? '',
         },
         creationParamsCodec: const StandardMessageCodec(),
       );

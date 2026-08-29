@@ -8,6 +8,7 @@
 import Foundation
 import Flutter
 import UIKit
+import BunnyStreamPlayer
 
 class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
     private var _view: UIView
@@ -36,6 +37,14 @@ class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
         let watermarkText = params?["watermarkText"] as? String ?? ""
         let startProgressPercent =
             (params?["startProgressPercent"] as? NSNumber)?.doubleValue ?? 0
+
+        // The SDK's own menus (Quality / Speed / Cancel ...) are localized by the
+        // player, not by Flutter, and iOS would resolve them against the *device*
+        // language — English menus inside an Arabic app. The host passes its own
+        // language down instead.
+        if let languageCode = params?["languageCode"] as? String, !languageCode.isEmpty {
+            Lingua.prepare(language: languageCode)
+        }
 
         let controller = BunnyPlayerViewController(
             accessKey: accessKey as? String ?? nil,

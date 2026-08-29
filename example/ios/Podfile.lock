@@ -1,0 +1,40 @@
+PODS:
+  - BunnyStreamPlayer (1.0.0):
+    - Kingfisher (>= 7.0)
+  - Flutter (1.0.0)
+  - flutter_bunny_video_player_ios (0.0.1):
+    - BunnyStreamPlayer
+    - Flutter
+  - integration_test (0.0.1):
+    - Flutter
+  - Kingfisher (8.8.1)
+
+DEPENDENCIES:
+  - BunnyStreamPlayer (from `../../ios/flutter_bunny_video_player_ios/bunny-stream-ios`)
+  - Flutter (from `Flutter`)
+  - flutter_bunny_video_player_ios (from `.symlinks/plugins/flutter_bunny_video_player_ios/ios`)
+  - integration_test (from `.symlinks/plugins/integration_test/ios`)
+  - Kingfisher (from `../../ios/flutter_bunny_video_player_ios/bunny-stream-ios/Vendor/Kingfisher`)
+
+EXTERNAL SOURCES:
+  BunnyStreamPlayer:
+    :path: "../../ios/flutter_bunny_video_player_ios/bunny-stream-ios"
+  Flutter:
+    :path: Flutter
+  flutter_bunny_video_player_ios:
+    :path: ".symlinks/plugins/flutter_bunny_video_player_ios/ios"
+  integration_test:
+    :path: ".symlinks/plugins/integration_test/ios"
+  Kingfisher:
+    :path: "../../ios/flutter_bunny_video_player_ios/bunny-stream-ios/Vendor/Kingfisher"
+
+SPEC CHECKSUMS:
+  BunnyStreamPlayer: 4225e08f548f31f96fd638dbfe0a31bf7f59441c
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  flutter_bunny_video_player_ios: 85831b515891595d9bdb0101700b895c65acb209
+  integration_test: 252f60fa39af5e17c3aa9899d35d908a0721b573
+  Kingfisher: b6c16059112dd6bdadf3d7ae01472ea1ef01a6b8
+
+PODFILE CHECKSUM: 82f4c02fc921c6de1c4f25694eee0189d697b713
+
+COCOAPODS: 1.16.2
