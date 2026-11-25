@@ -105,6 +105,25 @@ class BunnyPlayerController {
   }
 
   /// Reset zoom to default (1.0x scale, centered)
+  /// Pauses playback.
+  ///
+  /// Required by any host that navigates: pushing a route neither disposes the
+  /// player view nor changes the app lifecycle state, so without this the video
+  /// keeps playing under the new screen.
+  ///
+  /// Returns false when the native player is not attached yet.
+  Future<bool> pause() async {
+    return await _channel?.invokeMethod<bool>('pause') ?? false;
+  }
+
+  Future<bool> play() async {
+    return await _channel?.invokeMethod<bool>('play') ?? false;
+  }
+
+  Future<bool> isPlaying() async {
+    return await _channel?.invokeMethod<bool>('isPlaying') ?? false;
+  }
+
   Future<void> resetZoom() async {
     if (_disposed) return;
     await _channel?.invokeMethod('resetZoom');

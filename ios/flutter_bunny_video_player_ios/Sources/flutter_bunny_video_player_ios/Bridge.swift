@@ -87,6 +87,12 @@ class BunnyPlayerPlatformView: NSObject, FlutterPlatformView {
     private func handle(call: FlutterMethodCall, result: @escaping FlutterResult) {
         NSLog("📡 [BunnyPlayer] method call: %@", call.method)
         switch call.method {
+        case "pause":
+            result(_controller.pausePlayback())
+        case "play":
+            result(_controller.resumePlayback())
+        case "isPlaying":
+            result(_controller.isPlayingNow)
         case "resetZoom":
             _controller.resetZoomInstant()
             result(nil)

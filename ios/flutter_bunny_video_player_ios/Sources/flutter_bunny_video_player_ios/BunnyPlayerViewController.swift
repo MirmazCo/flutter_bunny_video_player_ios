@@ -1033,6 +1033,33 @@ class BunnyPlayerViewController: UIViewController {
         currentZoomTranslation = .zero
     }
 
+    // MARK: - Playback control
+
+    /// Pauses playback.
+    ///
+    /// The host needs this to stop audio when its page is covered: pushing a
+    /// route neither tears this view down nor changes the app lifecycle state,
+    /// so nothing else would ever stop it. Returns false when the underlying
+    /// player has not been captured yet (`onPlayerReady` not fired), so the
+    /// caller can tell "no player" apart from "paused".
+    @discardableResult
+    func pausePlayback() -> Bool {
+        guard let player = avPlayer else { return false }
+        player.pause()
+        return true
+    }
+
+    @discardableResult
+    func resumePlayback() -> Bool {
+        guard let player = avPlayer else { return false }
+        player.play()
+        return true
+    }
+
+    var isPlayingNow: Bool {
+        (avPlayer?.rate ?? 0) > 0
+    }
+
     func resetZoomInstant() {
         currentZoomScale = 1.0
         currentZoomTranslation = .zero
